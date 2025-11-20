@@ -22,28 +22,58 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Robust fetch function with Fallback to Cache
   const fetchData = useCallback(async (isManual = false) => {
     if (isManual) setIsRefreshing(true);
 
+    const fetchWithFallback = async <T,>(
+      url: string, 
+      cacheKey: string, 
+      parser: (text: string) => T[]
+    ): Promise<{ data: T[], fromCache: boolean }> => {
+      try {
+        const timestamp = Date.now();
+        const response = await fetch(`${url}&t=${timestamp}`, {
+          method: 'GET',
+          credentials: 'omit', // Important: Prevents CORS issues with public Google Sheets
+        });
+
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const text = await response.text();
+        const data = parser(text);
+        
+        // Save to cache on success
+        localStorage.setItem(cacheKey, JSON.stringify(data));
+        return { data, fromCache: false };
+      } catch (error) {
+        console.warn(`Fetch failed for ${cacheKey}, attempting cache fallback...`, error);
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          return { data: JSON.parse(cached), fromCache: true };
+        }
+        throw error;
+      }
+    };
+
     try {
-      const timestamp = Date.now();
-      
       // 1. Fetch Students
-      // Removed custom headers (cache: 'no-store') to avoid CORS preflight issues with Google Sheets
-      const resStudents = await fetch(`${GOOGLE_SHEET_STUDENTS}&t=${timestamp}`);
-      if (!resStudents.ok) throw new Error(`Gagal mengambil data siswa (${resStudents.status})`);
-      const textStudents = await resStudents.text();
-      const parsedStudents = parseStudentsCSV(textStudents);
-      setStudents(parsedStudents);
+      const studentsResult = await fetchWithFallback(
+        GOOGLE_SHEET_STUDENTS, 
+        'simpas_cache_students', 
+        parseStudentsCSV
+      );
+      setStudents(studentsResult.data);
 
       // 2. Fetch Violations
-      const resViolations = await fetch(`${GOOGLE_SHEET_VIOLATIONS}&t=${timestamp}`);
-      if (!resViolations.ok) throw new Error(`Gagal mengambil data pelanggaran (${resViolations.status})`);
-      const textViolations = await resViolations.text();
-      // Parsing logic ensures we start from 2nd row (index 1)
-      const parsedViolations = parseViolationsCSV(textViolations);
+      const violationsResult = await fetchWithFallback(
+        GOOGLE_SHEET_VIOLATIONS, 
+        'simpas_cache_violations', 
+        parseViolationsCSV
+      );
+      const parsedViolations = violationsResult.data;
       
-      // 3. Merge with local storage (Optimistic updates)
+      // 3. Merge with local storage (Optimistic updates for locally added/edited items)
       const localViolationsStr = localStorage.getItem('simpas_local_violations');
       const localViolations: Violation[] = localViolationsStr ? JSON.parse(localViolationsStr) : [];
       
@@ -53,9 +83,11 @@ export default function App() {
       const mergedViolations = [...parsedViolations];
 
       localViolations.forEach(localV => {
+        // If new item (not in sheet yet)
         if (!violationMap.has(localV.kode_pelanggaran)) {
           mergedViolations.push(localV);
         } else {
+          // If item exists but local version has newer status
           const sheetV = violationMap.get(localV.kode_pelanggaran);
           if (sheetV && sheetV.status_tindak_lanjut !== localV.status_tindak_lanjut) {
             const idx = mergedViolations.findIndex(v => v.kode_pelanggaran === localV.kode_pelanggaran);
@@ -66,21 +98,25 @@ export default function App() {
       
       setViolations(mergedViolations);
       
+      // Notifications
       if (isManual) {
-        toast.success("Data berhasil diperbarui");
+        if (studentsResult.fromCache || violationsResult.fromCache) {
+           toast("Data diperbarui (Offline Mode)", { icon: '⚠️' });
+        } else {
+           toast.success("Data berhasil diperbarui");
+        }
       }
-      
+
     } catch (error) {
-      console.error("Failed to fetch data from Google Sheets", error);
+      console.error("Critical error fetching data:", error);
       if (error instanceof Error) {
-        // More user-friendly error message
         if (error.message.includes('Failed to fetch')) {
-           toast.error("Gagal koneksi ke Google Sheets. Periksa internet anda.");
+           toast.error("Gagal koneksi internet. Data tidak dapat dimuat.");
         } else {
            toast.error("Gagal mengambil data: " + error.message);
         }
       } else {
-        toast.error("Gagal koneksi ke Google Sheets");
+        toast.error("Terjadi kesalahan saat memuat data");
       }
     } finally {
       setIsLoading(false);
