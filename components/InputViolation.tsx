@@ -37,8 +37,15 @@ export default function InputViolation({ students, violationsCount, onAddViolati
   }, [students, selectedClass]);
 
   const selectedStudent = useMemo(() => {
+    // FIX: Cari siswa di dalam list kelas yang sedang dipilih TERLEBIH DAHULU.
+    // Ini mengatasi masalah jika ada NIS ganda di database (misal: data lama di 7B belum dihapus saat pindah ke 7C).
+    // Jika kita mencari global menggunakan students.find(), dia akan mengambil data pertama yang ditemukan (yang mungkin data lama).
+    const inCurrentClass = studentsInClass.find(s => s.nis === selectedStudentId);
+    if (inCurrentClass) return inCurrentClass;
+
+    // Fallback ke pencarian global jika tidak ditemukan di kelas (seharusnya jarang terjadi)
     return students.find(s => s.nis === selectedStudentId);
-  }, [students, selectedStudentId]);
+  }, [students, studentsInClass, selectedStudentId]);
 
   const selectedViolationType = useMemo(() => {
     return VIOLATION_TYPES.find(t => t.label === formData.jenis_pelanggaran);
