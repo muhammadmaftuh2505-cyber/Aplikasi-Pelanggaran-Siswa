@@ -1,14 +1,16 @@
 import React, { ReactNode } from 'react';
-import { LogOut, User } from 'lucide-react';
+import { LogOut, User, RefreshCw } from 'lucide-react';
 
 interface LayoutProps {
   children?: ReactNode;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   onLogout: () => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
-export default function Layout({ children, activeTab, setActiveTab, onLogout }: LayoutProps) {
+export default function Layout({ children, activeTab, setActiveTab, onLogout, onRefresh, isRefreshing = false }: LayoutProps) {
   const tabs = [
     { id: 'dashboard', label: '📊 Dashboard' },
     { id: 'input', label: '📝 Input Pelanggaran' },
@@ -34,11 +36,26 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout }: 
             <p className="text-cyan-100 text-sm">SMP Yamis Jakarta</p>
           </div>
 
-          <div className="flex items-center gap-4 bg-white/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/10">
-            <div className="text-right">
+          <div className="flex items-center gap-3 bg-white/20 backdrop-blur-md px-5 py-3 rounded-xl border border-white/10">
+            <div className="text-right mr-2 hidden sm:block">
               <p className="text-xs text-cyan-100">Guru BK</p>
               <p className="text-sm font-bold text-white">Admin</p>
             </div>
+            
+            {onRefresh && (
+              <>
+                <button 
+                  onClick={onRefresh}
+                  disabled={isRefreshing}
+                  className={`p-2 hover:bg-white/20 rounded-lg transition-all text-white ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Refresh Data"
+                >
+                  <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : 'hover:rotate-180 transition-transform duration-500'}`} />
+                </button>
+                <div className="w-px h-8 bg-white/20 mx-1"></div>
+              </>
+            )}
+
             <button 
               onClick={onLogout}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors text-white"
