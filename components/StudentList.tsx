@@ -341,11 +341,17 @@ export default function StudentList({ students, violations }: StudentListProps) 
                            'bg-emerald-100 text-emerald-700'
                          }`}>+{v.poin_pelanggaran}</span>
                        </div>
-                       <p className="text-slate-400 text-xs mb-3 flex items-center gap-2">
+                       <p className="text-slate-400 text-xs mb-3 flex items-center gap-2 flex-wrap">
                          <span className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 font-medium">{v.kode_pelanggaran}</span>
                          <span>{new Date(v.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
                          <span>•</span>
                          <span>{v.lokasi_kejadian}</span>
+                         {v.pelapor && (
+                            <>
+                              <span>•</span>
+                              <span className="text-slate-600 font-medium">Oleh: {v.pelapor}</span>
+                            </>
+                         )}
                        </p>
                        <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
                          <p className="text-slate-600 text-xs italic leading-relaxed">"{v.deskripsi}"</p>

@@ -12,6 +12,17 @@ interface InputViolationProps {
 
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx5RJHID-0QupEh0q3nT3-leg45UEntgvtmqAyLm8PnAN5-kbdYcnoixsILQTWbCLDy/exec";
 
+// Safe UUID generator fallback
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 export default function InputViolation({ students, violationsCount, onAddViolation, onSuccess }: InputViolationProps) {
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -37,13 +48,8 @@ export default function InputViolation({ students, violationsCount, onAddViolati
   }, [students, selectedClass]);
 
   const selectedStudent = useMemo(() => {
-    // FIX: Cari siswa di dalam list kelas yang sedang dipilih TERLEBIH DAHULU.
-    // Ini mengatasi masalah jika ada NIS ganda di database (misal: data lama di 7B belum dihapus saat pindah ke 7C).
-    // Jika kita mencari global menggunakan students.find(), dia akan mengambil data pertama yang ditemukan (yang mungkin data lama).
     const inCurrentClass = studentsInClass.find(s => s.nis === selectedStudentId);
     if (inCurrentClass) return inCurrentClass;
-
-    // Fallback ke pencarian global jika tidak ditemukan di kelas (seharusnya jarang terjadi)
     return students.find(s => s.nis === selectedStudentId);
   }, [students, studentsInClass, selectedStudentId]);
 
@@ -68,9 +74,13 @@ export default function InputViolation({ students, violationsCount, onAddViolati
     }
 
     setIsSubmitting(true);
-    const loadingToast = toast.loading("Menyimpan ke Google Sheet...");
+    const loadingToast = toast.loading("Menyimpan data...");
+
+    // Generate code once to use in both payload and local state
+    const violationCode = generateCode();
 
     const sheetPayload = {
+      kode_pelanggaran: violationCode,
       nis: selectedStudent.nis,
       nama: selectedStudent.nama_lengkap,
       jk: selectedStudent.jenis_kelamin,
@@ -97,17 +107,23 @@ export default function InputViolation({ students, violationsCount, onAddViolati
         },
         body: JSON.stringify(sheetPayload),
       });
-
-      // Update Local State
+      
+      toast.success("Data berhasil disimpan!", { id: loadingToast });
+    } catch (error) {
+      console.error("Error saving violation:", error);
+      // Fallback toast for offline support
+      toast("Koneksi server gagal. Data disimpan secara offline.", { id: loadingToast, icon: '⚠️' });
+    } finally {
+      // Always update local state (Optimistic UI + Offline Support)
       const newViolation: Violation = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         nis: selectedStudent.nis,
         nama_lengkap: selectedStudent.nama_lengkap,
         jenis_kelamin: selectedStudent.jenis_kelamin,
         kelas: selectedStudent.kelas,
         nama_wali_kelas: selectedStudent.nama_wali_kelas,
         kontak_ortu: selectedStudent.kontak_ortu,
-        kode_pelanggaran: generateCode(),
+        kode_pelanggaran: violationCode,
         tanggal_pelanggaran: formData.tanggal_pelanggaran,
         jenis_pelanggaran: formData.jenis_pelanggaran,
         kategori_pelanggaran: selectedViolationType.kategori,
@@ -120,12 +136,7 @@ export default function InputViolation({ students, violationsCount, onAddViolati
       };
 
       onAddViolation(newViolation);
-      toast.success("Data berhasil disimpan!", { id: loadingToast });
       onSuccess();
-    } catch (error) {
-      console.error("Error saving violation:", error);
-      toast.error("Gagal menyimpan ke Google Sheet", { id: loadingToast });
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -219,7 +230,7 @@ export default function InputViolation({ students, violationsCount, onAddViolati
                 <div className="bg-white p-2 rounded-lg border border-slate-200 text-cyan-600 font-mono font-bold text-lg tracking-wider">
                   {generateCode()}
                 </div>
-                <span className="text-sm text-slate-500">Kode Otomatis (Estimasi)</span>
+                <span className="text-sm text-slate-500">Kode Pelanggaran</span>
               </div>
               <div className="text-sm text-slate-400">
                 {new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}

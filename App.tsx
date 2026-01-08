@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Login from './components/Login';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
@@ -19,13 +19,19 @@ export default function App() {
   
   const [students, setStudents] = useState<Student[]>([]);
   const [violations, setViolations] = useState<Violation[]>([]);
+  // Store IDs that definitively exist in the Google Sheet
+  const [sheetViolationIds, setSheetViolationIds] = useState<Set<string>>(new Set());
+  
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Robust fetch function with Fallback to Cache
   const fetchData = useCallback(async (isManual = false) => {
     if (isManual) setIsRefreshing(true);
-
+    
+    // UX: If manual refresh, ensure spinner shows for at least 1s so user feels it "worked"
+    const minLoadingTime = isManual ? new Promise(resolve => setTimeout(resolve, 1000)) : Promise.resolve();
+    
     const fetchWithFallback = async <T,>(
       url: string, 
       cacheKey: string, 
@@ -33,14 +39,26 @@ export default function App() {
     ): Promise<{ data: T[], fromCache: boolean }> => {
       try {
         const timestamp = Date.now();
-        const response = await fetch(`${url}&t=${timestamp}`, {
+        // Force Network: Add strict anti-caching headers and unique timestamp
+        const response = await fetch(`${url}&nocache=${timestamp}`, {
           method: 'GET',
-          credentials: 'omit', // Important: Prevents CORS issues with public Google Sheets
+          credentials: 'omit',
+          cache: 'no-store', // Important: Ignore browser cache
+          headers: {
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          }
         });
 
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         
         const text = await response.text();
+        
+        // Security Check: If response is HTML (e.g. Google Login page), throw error
+        if (text.trim().startsWith('<!DOCTYPE') || text.trim().startsWith('<html')) {
+          throw new Error("Gagal membaca data (Format HTML). Cek izin akses Google Sheet.");
+        }
+
         const data = parser(text);
         
         // Save to cache on success
@@ -50,32 +68,44 @@ export default function App() {
         console.warn(`Fetch failed for ${cacheKey}, attempting cache fallback...`, error);
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
-          return { data: JSON.parse(cached), fromCache: true };
+          try {
+            return { data: JSON.parse(cached), fromCache: true };
+          } catch (e) {
+            console.error("Cache corrupted", e);
+            return { data: [], fromCache: true };
+          }
         }
         throw error;
       }
     };
 
     try {
-      // 1. Fetch Students
-      const studentsResult = await fetchWithFallback(
-        GOOGLE_SHEET_STUDENTS, 
-        'simpas_cache_students', 
-        parseStudentsCSV
-      );
+      // Wait for both the fetch and the UX delay (if manual)
+      const [studentsResult, violationsResult] = await Promise.all([
+        fetchWithFallback(GOOGLE_SHEET_STUDENTS, 'simpas_cache_students', parseStudentsCSV),
+        fetchWithFallback(GOOGLE_SHEET_VIOLATIONS, 'simpas_cache_violations', parseViolationsCSV),
+        minLoadingTime 
+      ]);
+
       setStudents(studentsResult.data);
 
-      // 2. Fetch Violations
-      const violationsResult = await fetchWithFallback(
-        GOOGLE_SHEET_VIOLATIONS, 
-        'simpas_cache_violations', 
-        parseViolationsCSV
-      );
+      // Capture IDs strictly from the Sheet
       const parsedViolations = violationsResult.data;
-      
-      // 3. Merge with local storage (Optimistic updates for locally added/edited items)
-      const localViolationsStr = localStorage.getItem('simpas_local_violations');
-      const localViolations: Violation[] = localViolationsStr ? JSON.parse(localViolationsStr) : [];
+      const validSheetIds = new Set(parsedViolations.map(v => v.id));
+      setSheetViolationIds(validSheetIds);
+
+      // Merge with local storage (Optimistic updates)
+      let localViolations: any[] = [];
+      try {
+        const localViolationsStr = localStorage.getItem('simpas_local_violations');
+        localViolations = localViolationsStr ? JSON.parse(localViolationsStr) : [];
+        if (!Array.isArray(localViolations)) localViolations = [];
+      } catch (e) {
+        console.error("Error parsing local violations", e);
+        localViolations = [];
+      }
+
+      const validLocalViolations: any[] = []; // Used to rewrite clean local storage
       
       const violationMap = new Map<string, Violation>();
       parsedViolations.forEach(v => violationMap.set(v.kode_pelanggaran, v));
@@ -83,27 +113,53 @@ export default function App() {
       const mergedViolations = [...parsedViolations];
 
       localViolations.forEach(localV => {
-        // If new item (not in sheet yet)
-        if (!violationMap.has(localV.kode_pelanggaran)) {
-          mergedViolations.push(localV);
+        if (!localV || !localV.kode_pelanggaran) return;
+        
+        // Check if local edit is recent (within 10 mins)
+        const isRecent = localV._localTimestamp && (Date.now() - localV._localTimestamp < 10 * 60 * 1000);
+        
+        const sheetV = violationMap.get(localV.kode_pelanggaran);
+
+        if (!sheetV) {
+           // CASE: ID NOT FOUND IN SHEET
+           // Perform Fuzzy Deduplication
+           const isDuplicate = parsedViolations.some(p => 
+             p.nis === localV.nis &&
+             p.jenis_pelanggaran === localV.jenis_pelanggaran &&
+             p.poin_pelanggaran === localV.poin_pelanggaran &&
+             (p.deskripsi || '').trim() === (localV.deskripsi || '').trim()
+           );
+
+           if (!isDuplicate) {
+             // Truly new item (Pending Sync)
+             mergedViolations.push(localV);
+             validLocalViolations.push(localV);
+           }
         } else {
-          // If item exists but local version has newer status
-          const sheetV = violationMap.get(localV.kode_pelanggaran);
-          if (sheetV && sheetV.status_tindak_lanjut !== localV.status_tindak_lanjut) {
-            const idx = mergedViolations.findIndex(v => v.kode_pelanggaran === localV.kode_pelanggaran);
-            if (idx !== -1) mergedViolations[idx] = localV;
-          }
+           // CASE: ID FOUND IN SHEET
+           // Check if data matches
+           if (sheetV.status_tindak_lanjut !== localV.status_tindak_lanjut) {
+              // Conflict found.
+              if (isRecent) {
+                 // Local is fresher, override Sheet momentarily
+                 const idx = mergedViolations.findIndex(v => v.kode_pelanggaran === localV.kode_pelanggaran);
+                 if (idx !== -1) mergedViolations[idx] = localV;
+                 validLocalViolations.push(localV);
+              }
+           }
         }
       });
       
+      // Update persistent local storage
+      localStorage.setItem('simpas_local_violations', JSON.stringify(validLocalViolations));
       setViolations(mergedViolations);
       
       // Notifications
       if (isManual) {
         if (studentsResult.fromCache || violationsResult.fromCache) {
-           toast("Data diperbarui (Offline Mode)", { icon: '⚠️' });
+           toast("Koneksi tidak stabil. Menggunakan data offline.", { icon: '⚠️' });
         } else {
-           toast.success("Data berhasil diperbarui");
+           toast.success("Data berhasil diperbarui!");
         }
       }
 
@@ -111,7 +167,7 @@ export default function App() {
       console.error("Critical error fetching data:", error);
       if (error instanceof Error) {
         if (error.message.includes('Failed to fetch')) {
-           toast.error("Gagal koneksi internet. Data tidak dapat dimuat.");
+           toast.error("Gagal koneksi internet. Menggunakan data offline.");
         } else {
            toast.error("Gagal mengambil data: " + error.message);
         }
@@ -130,7 +186,7 @@ export default function App() {
     if (isLoggedIn) {
       fetchData(); // Initial fetch
       // Auto refresh every 30 seconds
-      intervalId = setInterval(() => fetchData(), 30000);
+      intervalId = setInterval(() => fetchData(false), 30000);
     }
 
     return () => {
@@ -140,22 +196,46 @@ export default function App() {
 
   const handleAddViolation = (newViolation: Violation) => {
     setViolations(prev => [newViolation, ...prev]);
-    const localViolationsStr = localStorage.getItem('simpas_local_violations');
-    const localViolations: Violation[] = localViolationsStr ? JSON.parse(localViolationsStr) : [];
-    localStorage.setItem('simpas_local_violations', JSON.stringify([...localViolations, newViolation]));
+    
+    try {
+      const localViolationsStr = localStorage.getItem('simpas_local_violations');
+      let localViolations: any[] = localViolationsStr ? JSON.parse(localViolationsStr) : [];
+      if (!Array.isArray(localViolations)) localViolations = [];
+      
+      const entry = { ...newViolation, _localTimestamp: Date.now() };
+      localStorage.setItem('simpas_local_violations', JSON.stringify([...localViolations, entry]));
+    } catch (e) {
+      console.error("Failed to save to local storage", e);
+    }
   };
 
   const handleUpdateViolation = (updatedViolation: Violation) => {
     setViolations(prev => prev.map(v => v.id === updatedViolation.id ? updatedViolation : v));
-    const localViolationsStr = localStorage.getItem('simpas_local_violations');
-    if (localViolationsStr) {
-       const localViolations: Violation[] = JSON.parse(localViolationsStr);
-       const idx = localViolations.findIndex(v => v.id === updatedViolation.id);
-       if (idx !== -1) localViolations[idx] = updatedViolation;
-       else localViolations.push(updatedViolation);
-       localStorage.setItem('simpas_local_violations', JSON.stringify(localViolations));
+    
+    try {
+      const localViolationsStr = localStorage.getItem('simpas_local_violations');
+      let localViolations: any[] = localViolationsStr ? JSON.parse(localViolationsStr) : [];
+      if (!Array.isArray(localViolations)) localViolations = [];
+      
+      const entry = { ...updatedViolation, _localTimestamp: Date.now() };
+      
+      const idx = localViolations.findIndex((v: any) => v.id === updatedViolation.id);
+      if (idx !== -1) {
+          localViolations[idx] = entry;
+      } else {
+          localViolations.push(entry);
+      }
+      
+      localStorage.setItem('simpas_local_violations', JSON.stringify(localViolations));
+    } catch (e) {
+      console.error("Failed to update local storage", e);
     }
   };
+
+  // Derived state: Only violations that exist in the sheet (by ID)
+  const sheetOnlyViolations = useMemo(() => {
+    return violations.filter(v => sheetViolationIds.has(v.id));
+  }, [violations, sheetViolationIds]);
 
   if (!isLoggedIn) {
     return (
@@ -173,12 +253,16 @@ export default function App() {
         activeTab={activeTab} 
         setActiveTab={setActiveTab} 
         onLogout={() => setIsLoggedIn(false)}
-        onRefresh={() => fetchData(true)}
+        onRefresh={() => {
+          toast.dismiss();
+          toast.loading("Sedang memuat data terbaru...", { duration: 1000 });
+          fetchData(true);
+        }}
         isRefreshing={isRefreshing}
       >
         {activeTab === 'dashboard' && (
           <Dashboard 
-            violations={violations} 
+            violations={sheetOnlyViolations} 
             students={students} 
             onViewDetail={(id) => {
               // Placeholder for detailed view
@@ -195,7 +279,7 @@ export default function App() {
         )}
         {activeTab === 'tindak-lanjut' && (
           <FollowUp 
-            violations={violations} 
+            violations={sheetOnlyViolations} 
             onUpdateViolation={handleUpdateViolation}
           />
         )}

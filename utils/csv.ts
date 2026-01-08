@@ -69,7 +69,6 @@ export const parseViolationsCSV = (csvText: string): Violation[] => {
   const violations: Violation[] = [];
   
   // Start loop at 1 to skip the Header row (Row 0)
-  // This fulfills the requirement "tampilkan datanya mulai dari baris ke2"
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
@@ -80,20 +79,40 @@ export const parseViolationsCSV = (csvText: string): Violation[] => {
     // 0:nis, 1:nama, 2:jk, 3:kelas, 4:wali, 5:kontak, 
     // 6:kode_pelanggaran, 7:tanggal, 8:jenis, 9:kategori, 
     // 10:lokasi, 11:deskripsi, 12:status, 13:hasil, 14:poin
+    // 15: pelapor (Column P)
     
     if (values.length >= 10 && values[0]) {
       const kode = values[6] || `SHEET-${i}`;
       const tanggal = values[7];
       
-      // ORDERING LOGIC:
-      // Google Sheet CSV usually comes in order of entry (top to bottom).
-      // To ensure "Recent Violations" shows the bottom-most rows first in a timestamp sort,
-      // we add the row index (i) as seconds to the base date.
-      const dateBase = tanggal && !isNaN(Date.parse(tanggal)) ? new Date(tanggal).getTime() : Date.now();
+      let dateBase = Date.now();
+      
+      // Robust Date Parsing
+      if (tanggal) {
+          const standardParse = Date.parse(tanggal);
+          if (!isNaN(standardParse)) {
+              dateBase = standardParse;
+          } else {
+              const parts = tanggal.split(/[/-]/);
+              if (parts.length === 3) {
+                  const p1 = parseInt(parts[0]);
+                  const p2 = parseInt(parts[1]);
+                  const p3 = parseInt(parts[2]);
+                  
+                  if (p1 <= 31 && p2 <= 12 && p3 > 1000) {
+                      dateBase = new Date(p3, p2 - 1, p1).getTime();
+                  } 
+                  else if (p1 > 1000 && p2 <= 12 && p3 <= 31) {
+                      dateBase = new Date(p1, p2 - 1, p3).getTime();
+                  }
+              }
+          }
+      }
+      
       const stableDate = new Date(dateBase + i * 1000).toISOString();
 
       violations.push({
-        id: kode, // Stable ID from sheet
+        id: kode, 
         nis: values[0],
         nama_lengkap: values[1],
         jenis_kelamin: values[2],
@@ -109,7 +128,8 @@ export const parseViolationsCSV = (csvText: string): Violation[] => {
         status_tindak_lanjut: (values[12] as any) || 'Menunggu Tindak Lanjut',
         hasil_tindak_lanjut: values[13] || '',
         poin_pelanggaran: parseInt(values[14]) || 0,
-        created_at: stableDate // Used for sorting
+        pelapor: values[15] || '', // Reading from column 15 (P)
+        created_at: stableDate 
       });
     }
   }

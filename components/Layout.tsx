@@ -47,10 +47,10 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout, on
                 <button 
                   onClick={onRefresh}
                   disabled={isRefreshing}
-                  className={`p-2 hover:bg-white/20 rounded-lg transition-all text-white ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`p-2 hover:bg-white/20 rounded-lg transition-all text-white active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed`}
                   title="Refresh Data"
                 >
-                  <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : 'hover:rotate-180 transition-transform duration-500'}`} />
+                  <RefreshCw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
                 </button>
                 <div className="w-px h-8 bg-white/20 mx-1"></div>
               </>
@@ -58,7 +58,7 @@ export default function Layout({ children, activeTab, setActiveTab, onLogout, on
 
             <button 
               onClick={onLogout}
-              className="p-2 hover:bg-white/20 rounded-lg transition-colors text-white"
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors text-white active:scale-95"
               title="Logout"
             >
               <LogOut className="w-5 h-5" />

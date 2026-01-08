@@ -21,6 +21,7 @@ export interface Violation {
   kategori_pelanggaran: 'Ringan' | 'Sedang' | 'Berat';
   poin_pelanggaran: number;
   lokasi_kejadian: string;
+  pelapor?: string; // New field for Teacher Name
   deskripsi: string;
   status_tindak_lanjut: 'Menunggu Tindak Lanjut' | 'Sudah Ditindak Lanjut';
   hasil_tindak_lanjut: string;
